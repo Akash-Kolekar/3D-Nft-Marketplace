@@ -12,3 +12,12 @@ docs/
 
 # Dotenv file
 .env
+
+# Node.js
+node_modules/
+.next/
+.vercel/
+.env.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
