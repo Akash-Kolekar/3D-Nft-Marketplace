@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from 'wagmi';
 import { formatEther, parseEther } from 'viem';
 import { contractAddresses } from '../../contracts/contractAddresses';
 import Glb3dMarketplaceAbi from '../../contracts/Glb3dMarketplace.json';
@@ -44,10 +44,77 @@ export default function MarketplacePage() {
   const marketplaceAddress = contractAddresses[chainId]?.glb3dMarketplace;
   const nftAddress = contractAddresses[chainId]?.glb3dNft;
 
-  // For testing, we'll use a mock refetch function
-  const refetchListings = () => {
-    console.log('Refetching listings...');
-    // This would normally refetch data from the contract
+  // Get the public client for contract reads
+  const publicClient = usePublicClient();
+
+  // Function to fetch active listings from the marketplace
+  const refetchListings = async () => {
+    if (!publicClient) return;
+
+    console.log('Fetching active listings...');
+    setIsLoading(true);
+
+    try {
+      // Call the getActiveListings function on the marketplace contract
+      const listings = await publicClient.readContract({
+        address: marketplaceAddress as `0x${string}`,
+        abi: Glb3dMarketplaceAbi,
+        functionName: 'getActiveListings',
+        args: [0, 100, false, false], // Start index, count, onlyGlb, onlyFeatured
+      }) as Listing[];
+
+      console.log('Fetched listings:', listings);
+
+      if (listings && listings.length > 0) {
+        setActiveListings(listings);
+
+        // Fetch metadata for each listing
+        fetchNftMetadata(listings);
+      } else {
+        console.log('No active listings found, using mock data');
+        // Use mock data if no listings are found
+        createMockListings();
+      }
+    } catch (err) {
+      console.error('Error fetching listings:', err);
+      // Use mock data if there's an error
+      createMockListings();
+    }
+  };
+
+  // Function to create mock listings for testing
+  const createMockListings = () => {
+    const mockListings: Listing[] = [];
+
+    for (let i = 1; i <= 5; i++) {
+      mockListings.push({
+        price: BigInt(i) * BigInt('10000000000000000'), // 0.01-0.05 ETH
+        seller: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266', // First Anvil account
+        tokenId: BigInt(i),
+        nftAddress: nftAddress as string,
+        is3dGlb: true,
+        previewUri: 'https://gateway.pinata.cloud/ipfs/bafkreicdas32m2xygbt5jsbrsac5mkksgom25cfpl223imhhctz2aml7um'
+      });
+    }
+
+    console.log('Created mock listings:', mockListings);
+    setActiveListings(mockListings);
+
+    // Create mock metadata for each listing
+    const metadataMap: Record<string, NftMetadata> = {};
+
+    mockListings.forEach((listing) => {
+      metadataMap[listing.tokenId.toString()] = {
+        name: `3D Model #${listing.tokenId.toString()}`,
+        description: `This is a 3D GLB model NFT with ID ${listing.tokenId.toString()}`,
+        glbUri: 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4',
+        previewUri: listing.previewUri,
+        creator: listing.seller
+      };
+    });
+
+    setNftMetadata(metadataMap);
+    setIsLoading(false);
   };
 
   // Contract write function for buying an NFT and making offers
@@ -67,44 +134,96 @@ export default function MarketplacePage() {
     hash: offerTxHash || undefined,
   });
 
-  // Fetch NFT metadata for each listing
-  useEffect(() => {
-    const fetchNftMetadata = async () => {
-      // Create mock listings for testing
-      const mockListings: Listing[] = [];
+  // Function to fetch NFT metadata for each listing
+  const fetchNftMetadata = async (listings: Listing[]) => {
+    if (!publicClient) return;
 
-      for (let i = 1; i <= 5; i++) {
-        mockListings.push({
-          price: BigInt(i) * BigInt('10000000000000000'), // 0.01-0.05 ETH
-          seller: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266', // First Anvil account
-          tokenId: BigInt(i),
-          nftAddress: nftAddress as string,
-          is3dGlb: true,
-          previewUri: 'https://gateway.pinata.cloud/ipfs/bafkreicdas32m2xygbt5jsbrsac5mkksgom25cfpl223imhhctz2aml7um'
-        });
-      }
-
-      setActiveListings(mockListings);
-
-      // Create mock metadata for each listing
+    try {
       const metadataMap: Record<string, NftMetadata> = {};
 
-      mockListings.forEach((listing) => {
-        metadataMap[listing.tokenId.toString()] = {
-          name: `3D Model #${listing.tokenId.toString()}`,
-          description: `This is a 3D GLB model NFT with ID ${listing.tokenId.toString()}`,
-          glbUri: 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4',
-          previewUri: listing.previewUri,
-          creator: listing.seller
-        };
+      // Process each listing to get metadata
+      const metadataPromises = listings.map(async (listing) => {
+        try {
+          // Get token metadata from the NFT contract
+          const glbUri = await publicClient.readContract({
+            address: nftAddress as `0x${string}`,
+            abi: Glb3dNftAbi,
+            functionName: 'glbURI',
+            args: [listing.tokenId],
+          });
+
+          const name = await publicClient.readContract({
+            address: nftAddress as `0x${string}`,
+            abi: Glb3dNftAbi,
+            functionName: 'name',
+            args: [listing.tokenId],
+          });
+
+          const description = await publicClient.readContract({
+            address: nftAddress as `0x${string}`,
+            abi: Glb3dNftAbi,
+            functionName: 'description',
+            args: [listing.tokenId],
+          });
+
+          const creator = await publicClient.readContract({
+            address: nftAddress as `0x${string}`,
+            abi: Glb3dNftAbi,
+            functionName: 'creator',
+            args: [listing.tokenId],
+          });
+
+          // Format IPFS URIs
+          const formattedGlbUri = (glbUri as string).replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+          const formattedPreviewUri = listing.previewUri.replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+
+          return {
+            tokenId: listing.tokenId.toString(),
+            metadata: {
+              name: (name as string) || `NFT #${listing.tokenId}`,
+              description: (description as string) || 'No description available',
+              glbUri: formattedGlbUri,
+              previewUri: formattedPreviewUri,
+              creator: (creator as string) || listing.seller
+            }
+          };
+        } catch (err) {
+          console.error(`Error fetching metadata for token ${listing.tokenId}:`, err);
+          return {
+            tokenId: listing.tokenId.toString(),
+            metadata: {
+              name: `NFT #${listing.tokenId}`,
+              description: 'Metadata unavailable',
+              glbUri: 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4',
+              previewUri: listing.previewUri,
+              creator: listing.seller
+            }
+          };
+        }
       });
 
+      const metadataResults = await Promise.all(metadataPromises);
+
+      // Create metadata map
+      metadataResults.forEach(({ tokenId, metadata }) => {
+        metadataMap[tokenId] = metadata;
+      });
+
+      console.log('Fetched metadata:', metadataMap);
       setNftMetadata(metadataMap);
       setIsLoading(false);
-    };
+    } catch (err) {
+      console.error('Error fetching NFT metadata:', err);
+      setIsLoading(false);
+    }
+  };
 
-    fetchNftMetadata();
-  }, [nftAddress]);
+  // Fetch listings when component mounts
+  useEffect(() => {
+    if (publicClient) {
+      refetchListings();
+    }
+  }, [publicClient]);
 
   // Add transaction success effects
   useEffect(() => {

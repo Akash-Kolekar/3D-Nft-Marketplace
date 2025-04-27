@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { useReadContract } from 'wagmi';
+import { usePublicClient } from 'wagmi';
 import GlbViewer from '../../../components/GlbViewer';
 import Link from 'next/link';
 import { contractAddresses } from '../../../contracts/contractAddresses';
@@ -27,54 +27,96 @@ export default function ViewNftPage() {
   const chainId = 31337; // Anvil local chain ID
   const nftAddress = contractAddresses[chainId]?.glb3dNft;
 
-  // For demo purposes, we'll use mock data
-  const glbUri = 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4';
-  const previewUri = 'https://gateway.pinata.cloud/ipfs/bafkreicdas32m2xygbt5jsbrsac5mkksgom25cfpl223imhhctz2aml7um';
-  const name = `3D Model #${tokenId}`;
-  const description = `This is a 3D GLB model NFT with ID ${tokenId}`;
-  const creator = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'; // First Anvil account
+  // Get the public client for contract reads
+  const publicClient = usePublicClient();
 
-  // Error states
-  const isGlbUriError = false;
-  const isPreviewUriError = false;
-  const isNameError = false;
-  const isDescriptionError = false;
-  const isCreatorError = false;
+  // Function to create mock metadata
+  const createMockMetadata = () => {
+    return {
+      glbUri: 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4',
+      previewUri: 'https://gateway.pinata.cloud/ipfs/bafkreicdas32m2xygbt5jsbrsac5mkksgom25cfpl223imhhctz2aml7um',
+      name: `3D Model #${tokenId}`,
+      description: `This is a 3D GLB model NFT with ID ${tokenId}`,
+      creator: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' // First Anvil account
+    };
+  };
 
   // Fetch NFT metadata from the contract
   useEffect(() => {
     const fetchMetadata = async () => {
+      if (!publicClient || !nftAddress) {
+        console.log('Contract not available, using mock data');
+        setMetadata(createMockMetadata());
+        setIsLoading(false);
+        return;
+      }
+
       try {
         setIsLoading(true);
         setError('');
 
-        // Check if any of the contract reads failed
-        if (isGlbUriError || isPreviewUriError || isNameError || isDescriptionError || isCreatorError) {
-          setError('Error fetching NFT metadata from the contract');
-          setIsLoading(false);
-          return;
-        }
+        // Fetch NFT metadata from the contract
+        const glbUri = await publicClient.readContract({
+          address: nftAddress as `0x${string}`,
+          abi: Glb3dNftAbi,
+          functionName: 'glbURI',
+          args: [BigInt(tokenId)],
+        });
 
-        // Check if we have all the data
-        if (glbUri && previewUri && name && description && creator) {
-          setMetadata({
-            glbUri: glbUri as string,
-            previewUri: previewUri as string,
-            name: name as string,
-            description: description as string,
-            creator: creator as string
-          });
-          setIsLoading(false);
-        }
+        const previewUri = await publicClient.readContract({
+          address: nftAddress as `0x${string}`,
+          abi: Glb3dNftAbi,
+          functionName: 'previewURI',
+          args: [BigInt(tokenId)],
+        });
+
+        const name = await publicClient.readContract({
+          address: nftAddress as `0x${string}`,
+          abi: Glb3dNftAbi,
+          functionName: 'name',
+          args: [BigInt(tokenId)],
+        });
+
+        const description = await publicClient.readContract({
+          address: nftAddress as `0x${string}`,
+          abi: Glb3dNftAbi,
+          functionName: 'description',
+          args: [BigInt(tokenId)],
+        });
+
+        const creator = await publicClient.readContract({
+          address: nftAddress as `0x${string}`,
+          abi: Glb3dNftAbi,
+          functionName: 'creator',
+          args: [BigInt(tokenId)],
+        });
+
+        // Format IPFS URIs
+        const formattedGlbUri = (glbUri as string).replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+        const formattedPreviewUri = (previewUri as string).replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+
+        // Set the metadata
+        setMetadata({
+          glbUri: formattedGlbUri,
+          previewUri: formattedPreviewUri,
+          name: (name as string) || `NFT #${tokenId}`,
+          description: (description as string) || 'No description available',
+          creator: (creator as string) || ''
+        });
+
+        setIsLoading(false);
       } catch (err) {
         console.error('Error fetching NFT metadata:', err);
-        setError('Error fetching NFT metadata. Please try again.');
+        console.log('Using mock data instead');
+
+        // Use mock data if there's an error
+        setMetadata(createMockMetadata());
         setIsLoading(false);
       }
     };
 
     fetchMetadata();
-  }, [tokenId, glbUri, previewUri, name, description, creator, isGlbUriError, isPreviewUriError, isNameError, isDescriptionError, isCreatorError]);
+  }, [tokenId, publicClient, nftAddress]);
 
   return (
     <div className="container mx-auto px-4 py-8">

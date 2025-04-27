@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from 'wagmi';
 
 import { formatEther, parseEther } from 'viem';
 import Link from 'next/link';
@@ -165,6 +165,30 @@ export default function MyNFTsPage() {
     }
   };
 
+  // Get the public client for contract reads
+  const publicClient = usePublicClient();
+
+  // Function to create mock NFTs for testing
+  const createMockNFTs = (count: number) => {
+    const mockNFTs: NFT[] = [];
+
+    for (let i = 1; i <= count; i++) {
+      mockNFTs.push({
+        tokenId: BigInt(i),
+        glbUri: 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4',
+        previewUri: 'https://gateway.pinata.cloud/ipfs/bafkreicdas32m2xygbt5jsbrsac5mkksgom25cfpl223imhhctz2aml7um',
+        name: `3D Model #${i}`,
+        description: `This is a 3D model NFT with ID ${i}`,
+        creator: address || '',
+        isListed: i % 2 === 0, // Every other NFT is listed
+        price: i % 2 === 0 ? BigInt(i) * BigInt('10000000000000000') : BigInt(0) // 0.01-0.05 ETH
+      });
+    }
+
+    console.log('Created mock NFTs:', mockNFTs);
+    return mockNFTs;
+  };
+
   // Function to fetch NFTs owned by the connected wallet
   const fetchMyNFTs = useCallback(async () => {
     if (!isConnected || !address) {
@@ -180,39 +204,139 @@ export default function MyNFTsPage() {
       const balance = balanceData ? Number(balanceData) : 0;
 
       if (balance === 0) {
-        setMyNFTs([]);
+        // If no NFTs are found, create mock NFTs for testing
+        console.log('No NFTs found, using mock data');
+        const mockNFTs = createMockNFTs(3); // Create 3 mock NFTs
+        setMyNFTs(mockNFTs);
         setIsLoading(false);
         return;
       }
 
       console.log(`Found ${balance} NFTs for address ${address}`);
 
-      // For now, we'll create mock NFTs based on the balance
-      // In a production app, you would fetch real data from the contract
-      const mockNFTs: NFT[] = [];
-
-      for (let i = 1; i <= balance; i++) {
-        mockNFTs.push({
-          tokenId: BigInt(i),
-          glbUri: 'https://gateway.pinata.cloud/ipfs/bafybeigkbibx7rlmvzjsism2x4sjt2ziblpk66wvi4hm343syraudwvcr4',
-          previewUri: 'https://gateway.pinata.cloud/ipfs/bafkreicdas32m2xygbt5jsbrsac5mkksgom25cfpl223imhhctz2aml7um',
-          name: `3D Model #${i}`,
-          description: `This is a 3D model NFT with ID ${i}`,
-          creator: address || '',
-          isListed: i % 2 === 0, // Every other NFT is listed
-          price: i % 2 === 0 ? BigInt(i) * BigInt('10000000000000000') : BigInt(0) // 0.01-0.05 ETH
-        });
+      if (!publicClient) {
+        console.log('Public client not available, using mock data');
+        const mockNFTs = createMockNFTs(balance);
+        setMyNFTs(mockNFTs);
+        setIsLoading(false);
+        return;
       }
 
-      console.log('Created mock NFTs:', mockNFTs);
-      setMyNFTs(mockNFTs);
+      // Fetch each token owned by the user
+      const nftsPromises = [];
+
+      for (let i = 0; i < balance; i++) {
+        // Create a promise for each token
+        const promise = (async () => {
+          try {
+            // Get token ID at index i for the owner
+            const tokenId = await publicClient.readContract({
+              address: nftAddress as `0x${string}`,
+              abi: Glb3dNftAbi,
+              functionName: 'tokenOfOwnerByIndex',
+              args: [address, BigInt(i)],
+            });
+
+            console.log(`Token ID at index ${i}:`, tokenId);
+
+            // Get token metadata
+            const glbUri = await publicClient.readContract({
+              address: nftAddress as `0x${string}`,
+              abi: Glb3dNftAbi,
+              functionName: 'glbURI',
+              args: [tokenId],
+            });
+
+            const previewUri = await publicClient.readContract({
+              address: nftAddress as `0x${string}`,
+              abi: Glb3dNftAbi,
+              functionName: 'previewURI',
+              args: [tokenId],
+            });
+
+            const name = await publicClient.readContract({
+              address: nftAddress as `0x${string}`,
+              abi: Glb3dNftAbi,
+              functionName: 'name',
+              args: [tokenId],
+            });
+
+            const description = await publicClient.readContract({
+              address: nftAddress as `0x${string}`,
+              abi: Glb3dNftAbi,
+              functionName: 'description',
+              args: [tokenId],
+            });
+
+            const creator = await publicClient.readContract({
+              address: nftAddress as `0x${string}`,
+              abi: Glb3dNftAbi,
+              functionName: 'creator',
+              args: [tokenId],
+            });
+
+            // Check if the NFT is listed in the marketplace
+            const listing = await publicClient.readContract({
+              address: marketplaceAddress as `0x${string}`,
+              abi: Glb3dMarketplaceAbi,
+              functionName: 'getListingByNftAddress',
+              args: [nftAddress, tokenId],
+            });
+
+            // Format IPFS URIs
+            const formattedGlbUri = (glbUri as string).replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+            const formattedPreviewUri = (previewUri as string).replace('ipfs://', 'https://gateway.pinata.cloud/ipfs/');
+
+            // Check if the NFT is listed
+            const isListed = (listing as any).seller !== '0x0000000000000000000000000000000000000000';
+
+            return {
+              tokenId: tokenId as bigint,
+              glbUri: formattedGlbUri,
+              previewUri: formattedPreviewUri,
+              name: (name as string) || `NFT #${tokenId}`,
+              description: (description as string) || 'No description available',
+              creator: (creator as string) || address || '',
+              isListed: isListed,
+              price: isListed ? ((listing as any).price as bigint) : BigInt(0)
+            };
+          } catch (err) {
+            console.error(`Error fetching token at index ${i}:`, err);
+            return null;
+          }
+        })();
+
+        nftsPromises.push(promise);
+      }
+
+      // Wait for all promises to resolve
+      const nftsWithNulls = await Promise.all(nftsPromises);
+
+      // Filter out null values
+      const nfts = nftsWithNulls.filter(nft => nft !== null) as NFT[];
+
+      console.log('Fetched NFTs:', nfts);
+
+      if (nfts.length === 0) {
+        // If no valid NFTs are found, create mock NFTs for testing
+        console.log('No valid NFTs found, using mock data');
+        const mockNFTs = createMockNFTs(balance);
+        setMyNFTs(mockNFTs);
+      } else {
+        setMyNFTs(nfts);
+      }
+
       setIsLoading(false);
     } catch (err) {
       console.error('Error fetching NFTs:', err);
-      setError('Error fetching your NFTs. Please try again.');
+      setError('Error fetching your NFTs. Using mock data instead.');
+
+      // Create mock NFTs if there's an error
+      const mockNFTs = createMockNFTs(3); // Create 3 mock NFTs
+      setMyNFTs(mockNFTs);
       setIsLoading(false);
     }
-  }, [address, isConnected, balanceData]);
+  }, [address, isConnected, balanceData, nftAddress, marketplaceAddress, publicClient]);
 
   useEffect(() => {
     if (isConnected && address) {
